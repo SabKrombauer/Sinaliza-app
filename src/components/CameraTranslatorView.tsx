@@ -34,6 +34,12 @@ const DEMO_PRESETS: Array<{ id: DemoPreset; label: string }> = [
   { id: 'V', label: 'Letra V' },
 ];
 
+const API_URL = (import.meta.env.VITE_LIBRAS_API_URL || '').replace(/\/$/, '');
+const API_INTERVAL_MS = 750;
+const API_CONFIDENCE_THRESHOLD = 0.82;
+
+type PredictionResponse = { sinal: string | null; confianca: number; maos_detectadas: number };
+
 const HAND_CONNECTIONS: Array<[number, number]> = [
   [0, 1], [1, 2], [2, 3], [3, 4],
   [0, 5], [5, 6], [6, 7], [7, 8],
@@ -88,6 +94,8 @@ export const CameraTranslatorView: React.FC = () => {
   const stabilizerRef = useRef(new SignStabilizer(5, 1400));
   const wristHistoryRef = useRef<LandmarkPoint[]>([]);
   const rafRef = useRef<number>(0);
+  const requestInFlightRef = useRef(false);
+  const cameraSessionRef = useRef(0);
 
   const [mode, setMode] = useState<'idle' | 'camera' | 'demo'>('idle');
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
@@ -112,6 +120,7 @@ export const CameraTranslatorView: React.FC = () => {
   }, [keepHistory, retentionSeconds]);
 
   const stopAllCapture = useCallback(() => {
+    cameraSessionRef.current += 1;
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = 0;
@@ -198,7 +207,68 @@ export const CameraTranslatorView: React.FC = () => {
         });
       }
 
-      setCameraStatus('Câmera ativa · Analisando pontos de referência das mãos em tempo real');
+      if (!API_URL) setCameraError('Defina VITE_LIBRAS_API_URL em .env.local para usar o modelo Python.');
+      setCameraStatus(
+        API_URL
+          ? 'Câmera ativa · MediaPipe + modelo treinado do DuoManos'
+          : 'Câmera ativa · Configure VITE_LIBRAS_API_URL para reconhecer sinais reais'
+      );
+
+      const session = cameraSessionRef.current;
+      const analyzeWithPython = async (video: HTMLVideoElement) => {
+        if (requestInFlightRef.current || !API_URL) return;
+        requestInFlightRef.current = true;
+        try {
+          const frame = document.createElement('canvas');
+          frame.width = 480;
+          frame.height = Math.max(1, Math.round(480 * video.videoHeight / video.videoWidth));
+          const ctx = frame.getContext('2d');
+          if (!ctx) return;
+          // Envie o frame sem espelhar: o Python aplica o mesmo flip usado na coleta.
+          ctx.drawImage(video, 0, 0, frame.width, frame.height);
+          const blob = await new Promise<Blob | null>((resolve) =>
+            frame.toBlob(resolve, 'image/jpeg', 0.6)
+          );
+          if (!blob) return;
+          const payload = new FormData();
+          payload.append('imagem', blob, 'frame.jpg');
+          const response = await fetch(`${API_URL}/reconhecer`, {
+            method: 'POST',
+            body: payload,
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const prediction: PredictionResponse = await response.json();
+          if (session !== cameraSessionRef.current) return;
+
+          if (!prediction.sinal || prediction.confianca < API_CONFIDENCE_THRESHOLD) {
+            setLiveCandidate(null);
+            stabilizerRef.current.push(null);
+            return;
+          }
+          const classification: ClassificationResult = {
+            signId: prediction.sinal.toLowerCase(),
+            label: prediction.sinal.toUpperCase(),
+            gloss: prediction.sinal.toUpperCase(),
+            confidence: prediction.confianca,
+            handshapeHint: 'Previsão do modelo treinado do DuoManos',
+          };
+          setLiveCandidate(classification);
+          const confirmed = stabilizerRef.current.push(classification, Date.now());
+          if (confirmed) {
+            setCaptions((prev) => appendCaptionToken(prev, confirmed.label));
+          }
+          setCameraError(null);
+        } catch (error) {
+          if (session === cameraSessionRef.current) {
+            setCameraError('Não foi possível conectar à API Python. Confira o endereço, CORS e a rede.');
+            setCameraStatus('Conexão com o modelo indisponível');
+          }
+        } finally {
+          requestInFlightRef.current = false;
+        }
+      };
+
+      let lastRequestAt = 0;
 
       let lastVideoTime = -1;
       const detectLoop = () => {
@@ -238,20 +308,17 @@ export const CameraTranslatorView: React.FC = () => {
                 );
               }
 
-              const classification = classifyHandLandmarks(
-                primaryHand,
-                wristHistoryRef.current
-              );
-              setLiveCandidate(classification);
-
-              const confirmed = stabilizerRef.current.push(classification, Date.now());
-              if (confirmed) {
-                setCaptions((prev) => appendCaptionToken(prev, confirmed.label));
-              }
+              // As regras heurísticas permanecem apenas no Modo Demonstração.
+              // Na câmera real usamos exclusivamente o modelo Python treinado.
             } else {
               setLiveCandidate(null);
               stabilizerRef.current.push(null);
             }
+          }
+          const now = performance.now();
+          if (API_URL && now - lastRequestAt >= API_INTERVAL_MS && !requestInFlightRef.current) {
+            lastRequestAt = now;
+            void analyzeWithPython(video);
           }
         }
 
@@ -361,10 +428,10 @@ export const CameraTranslatorView: React.FC = () => {
             id="camera-heading"
             className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl [text-wrap:balance]"
           >
-            Tradução em tempo real pela câmera
+            Reconhecimento de sinais pela câmera
           </h1>
           <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
-            O sistema analisa 21 pontos de referência da mão e compara a configuração e o movimento com o banco de sinais em Libras para exibir legendas legíveis na tela.
+            O MediaPipe rastreia as mãos e o modelo treinado do DuoManos identifica sinais isolados cadastrados. Esta versão ainda não traduz conversas completas em Libras.
           </p>
         </div>
 
@@ -464,7 +531,7 @@ export const CameraTranslatorView: React.FC = () => {
             className="border-t border-slate-800 bg-slate-950 px-5 py-4"
           >
             <div className="flex items-center justify-between gap-2 text-[11px] uppercase tracking-wider text-slate-400 mb-1.5">
-              <span>Tradução em tempo real</span>
+              <span>Texto dos sinais reconhecidos</span>
               <span className="font-mono">
                 {keepHistory ? 'Exibição contínua' : `Permanência: ${retentionSeconds}s`}
               </span>
