@@ -20,6 +20,7 @@ import {
   type ClassificationResult,
   type LandmarkPoint,
 } from '../utils/librasClassifier';
+import { LiveSignGate } from '../utils/liveSignGate';
 
 type DemoPreset = 'ola' | 'tudo-bem' | 'amor' | 'obrigado' | 'nao' | 'sim' | 'L' | 'V';
 
@@ -35,8 +36,8 @@ const DEMO_PRESETS: Array<{ id: DemoPreset; label: string }> = [
 ];
 
 const API_URL = (import.meta.env.VITE_LIBRAS_API_URL || '').replace(/\/$/, '');
-const API_INTERVAL_MS = 750;
-const API_CONFIDENCE_THRESHOLD = 0.82;
+const API_INTERVAL_MS = 250;
+const API_CONFIDENCE_THRESHOLD = 0.72;
 
 type PredictionResponse = { sinal: string | null; confianca: number; maos_detectadas: number };
 
@@ -95,6 +96,7 @@ export const CameraTranslatorView: React.FC = () => {
   const wristHistoryRef = useRef<LandmarkPoint[]>([]);
   const rafRef = useRef<number>(0);
   const requestInFlightRef = useRef(false);
+  const liveGateRef = useRef(new LiveSignGate(2, API_CONFIDENCE_THRESHOLD));
   const cameraSessionRef = useRef(0);
 
   const [mode, setMode] = useState<'idle' | 'camera' | 'demo'>('idle');
@@ -133,6 +135,7 @@ export const CameraTranslatorView: React.FC = () => {
       videoRef.current.srcObject = null;
     }
     stabilizerRef.current.reset();
+    liveGateRef.current.reset();
     wristHistoryRef.current = [];
     setLiveCandidate(null);
     setMode('idle');
@@ -239,10 +242,27 @@ export const CameraTranslatorView: React.FC = () => {
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const prediction: PredictionResponse = await response.json();
           if (session !== cameraSessionRef.current) return;
+          setCameraStatus(
+            `Câmera ativa · ${prediction.maos_detectadas} mão(s) detectada(s) · Modelo DuoManos`
+          );
 
-          if (!prediction.sinal || prediction.confianca < API_CONFIDENCE_THRESHOLD) {
-            setLiveCandidate(null);
-            stabilizerRef.current.push(null);
+          // Mostra a previsão mesmo abaixo do limiar: ajuda a diagnosticar
+          // sinais que não foram bem aprendidos, como os movimentos de "OI".
+          const accepted = prediction.sinal && prediction.confianca >= API_CONFIDENCE_THRESHOLD;
+          if (!accepted) {
+            setLiveCandidate(
+              prediction.sinal
+                ? {
+                    signId: prediction.sinal.toLowerCase(),
+                    label: prediction.sinal.toUpperCase(),
+                    gloss: prediction.sinal.toUpperCase(),
+                    confidence: prediction.confianca,
+                    handshapeHint: 'Previsão ainda abaixo do limiar para adicionar texto',
+                  }
+                : null
+            );
+            liveGateRef.current.push(null, 0);
+            setCameraError(null);
             return;
           }
           const classification: ClassificationResult = {
@@ -253,9 +273,15 @@ export const CameraTranslatorView: React.FC = () => {
             handshapeHint: 'Previsão do modelo treinado do DuoManos',
           };
           setLiveCandidate(classification);
-          const confirmed = stabilizerRef.current.push(classification, Date.now());
+          const confirmed = liveGateRef.current.push(classification.label, prediction.confianca);
           if (confirmed) {
-            setCaptions((prev) => appendCaptionToken(prev, confirmed.label));
+            // Uma repeticao real, com pausa entre sinais, pode ser escrita novamente.
+            // A funcao de demonstracao deduplica palavras consecutivas, por isso
+            // usamos um registro separado para o modelo real.
+            setCaptions((prev) => [
+              ...prev,
+              { id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text: confirmed, timestamp: Date.now() },
+            ].slice(-16));
           }
           setCameraError(null);
         } catch (error) {
@@ -312,7 +338,7 @@ export const CameraTranslatorView: React.FC = () => {
               // Na câmera real usamos exclusivamente o modelo Python treinado.
             } else {
               setLiveCandidate(null);
-              stabilizerRef.current.push(null);
+              // A API é quem confirma as ausências, não cada frame do navegador.
             }
           }
           const now = performance.now();
