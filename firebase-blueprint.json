@@ -1,0 +1,83 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Authenticated learner profile, gamified Libras study progress, and application settings.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the account owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userName": {
+          "type": "string",
+          "description": "Display name shown on the learner profile.",
+          "minLength": 2,
+          "maxLength": 40
+        },
+        "xp": {
+          "type": "integer",
+          "description": "Total accumulated study XP."
+        },
+        "dailyXpGoal": {
+          "type": "integer",
+          "description": "Daily XP study target (10 to 500)."
+        },
+        "completedModuleIds": {
+          "type": "array",
+          "description": "List of completed study module IDs (max 100)."
+        },
+        "practicedSignIds": {
+          "type": "array",
+          "description": "List of practiced Libras sign IDs (max 500)."
+        },
+        "studyDates": {
+          "type": "array",
+          "description": "Local YYYY-MM-DD dates with study activity (max 366)."
+        },
+        "xpByDate": {
+          "type": "object",
+          "description": "Map from YYYY-MM-DD local date to daily XP total."
+        },
+        "settings": {
+          "type": "object",
+          "description": "User preferences for VLibras avatar and animation speed."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the account record was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the last synchronized update."
+        }
+      },
+      "required": [
+        "ownerId",
+        "userName",
+        "xp",
+        "dailyXpGoal",
+        "completedModuleIds",
+        "practicedSignIds",
+        "studyDates",
+        "xpByDate",
+        "settings",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/private/{docId}": {
+      "schema": {
+        "$ref": "#/entities/UserAccount"
+      },
+      "description": "Private owner-only user account, study progress, and settings document (docId = 'account')."
+    }
+  }
+}

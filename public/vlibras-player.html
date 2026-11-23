@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VLibras Player 3D</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #f8fafc;
+      }
+      #gameContainer {
+        width: 100vw;
+        height: 100vh;
+        background-color: #f8fafc !important;
+      }
+      canvas {
+        width: 100% !important;
+        height: 100% !important;
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="gameContainer"></div>
+    <script src="https://cdn.jsdelivr.net/gh/spbgovbr-vlibras/vlibras-portal@v7.12.3/app/unity/unity-loader.js"></script>
+    <script>
+      (function () {
+        const UNITY_BASE =
+          'https://cdn.jsdelivr.net/gh/spbgovbr-vlibras/vlibras-portal@v7.12.3/app/unity/';
+        let gameInstance = null;
+
+        const postEvent = (event, data) => {
+          if (window.parent) {
+            window.parent.postMessage(
+              { type: 'vlibras_unity_event', event, data },
+              '*'
+            );
+          }
+        };
+
+        window.onPlayingStateChange = function () {
+          postEvent('on_playing_state_change', Array.prototype.slice.call(arguments));
+        };
+        window.CounterGloss = function () {
+          postEvent('counter_gloss', Array.prototype.slice.call(arguments));
+        };
+        window.onLoadPlayer = function () {
+          postEvent('on_load_player', true);
+        };
+        window.GetAvatar = function (avatar) {
+          postEvent('get_avatar', avatar);
+        };
+        window.FinishWelcome = function (val) {
+          postEvent('finish_welcome', val);
+        };
+
+        window.addEventListener('message', function (ev) {
+          if (!gameInstance || !ev.data) return;
+          const msg = ev.data;
+          if (msg.type === 'unity' && msg.object && msg.method) {
+            try {
+              if (msg.params !== undefined) {
+                gameInstance.SendMessage(msg.object, msg.method, msg.params);
+              } else {
+                gameInstance.SendMessage(msg.object, msg.method);
+              }
+            } catch (err) {
+              postEvent('on_error', String(err));
+            }
+          }
+        });
+
+        if (typeof UnityLoader !== 'undefined') {
+          try {
+            gameInstance = UnityLoader.instantiate(
+              'gameContainer',
+              UNITY_BASE + 'playerweb.json?v=7.12.2',
+              {
+                onProgress: function (_instance, progress) {
+                  postEvent('update_progress', progress);
+                },
+                compatibilityCheck: function (_instance, accept, deny) {
+                  if (UnityLoader.SystemInfo && UnityLoader.SystemInfo.hasWebGL) {
+                    accept();
+                  } else {
+                    postEvent('on_error', 'webgl_unsupported');
+                    deny();
+                  }
+                },
+              }
+            );
+          } catch (err) {
+            postEvent('on_error', String(err));
+          }
+        } else {
+          postEvent('on_error', 'loader_unavailable');
+        }
+      })();
+    </script>
+  </body>
+</html>

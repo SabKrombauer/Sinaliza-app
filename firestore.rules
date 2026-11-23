@@ -1,0 +1,128 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidSettings(settings) {
+      return settings is map
+        && settings.keys().hasAll(['defaultAvatar', 'defaultSpeed'])
+        && settings.keys().hasOnly(['defaultAvatar', 'defaultSpeed', 'showAccessibilityTips'])
+        && settings.defaultAvatar in ['icaro', 'hosana', 'guga']
+        && (settings.defaultSpeed is int || settings.defaultSpeed is float)
+        && (settings.defaultSpeed == 0.7 || settings.defaultSpeed == 1 || settings.defaultSpeed == 1.4)
+        && (!('showAccessibilityTips' in settings) || settings.showAccessibilityTips is bool);
+    }
+
+    function isValidUserAccount(data, userId) {
+      return data.keys().hasAll([
+          'ownerId',
+          'userName',
+          'xp',
+          'dailyXpGoal',
+          'completedModuleIds',
+          'practicedSignIds',
+          'studyDates',
+          'xpByDate',
+          'settings',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId',
+          'userName',
+          'xp',
+          'dailyXpGoal',
+          'completedModuleIds',
+          'practicedSignIds',
+          'studyDates',
+          'xpByDate',
+          'settings',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && data.userName is string
+        && data.userName.size() >= 2
+        && data.userName.size() <= 40
+        && data.xp is int
+        && data.xp >= 0
+        && data.xp <= 1000000
+        && data.dailyXpGoal is int
+        && data.dailyXpGoal >= 10
+        && data.dailyXpGoal <= 500
+        && data.completedModuleIds is list
+        && data.completedModuleIds.size() <= 100
+        && (data.completedModuleIds.size() == 0 || (data.completedModuleIds[0] is string && data.completedModuleIds[0].size() <= 64))
+        && data.practicedSignIds is list
+        && data.practicedSignIds.size() <= 500
+        && (data.practicedSignIds.size() == 0 || (data.practicedSignIds[0] is string && data.practicedSignIds[0].size() <= 80))
+        && data.studyDates is list
+        && data.studyDates.size() <= 366
+        && (data.studyDates.size() == 0 || (data.studyDates[0] is string && data.studyDates[0].size() == 10 && data.studyDates[0].matches('^\\d{4}-\\d{2}-\\d{2}$')))
+        && data.xpByDate is map
+        && data.xpByDate.size() <= 366
+        && isValidSettings(data.settings)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /users/{userId}/private/{docId} {
+      allow get: if isValidId(userId) && docId == 'account' && isOwner(userId);
+      allow list: if false;
+
+      allow create: if isValidId(userId)
+        && docId == 'account'
+        && isVerified()
+        && isOwner(userId)
+        && isValidUserAccount(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(userId)
+        && docId == 'account'
+        && isVerified()
+        && isOwner(userId)
+        && isValidUserAccount(incoming(), userId)
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['userName', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['dailyXpGoal', 'settings', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['completedModuleIds', 'practicedSignIds', 'studyDates', 'xp', 'xpByDate', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['userName', 'completedModuleIds', 'practicedSignIds', 'studyDates', 'xp', 'xpByDate', 'dailyXpGoal', 'settings', 'updatedAt'])
+        );
+
+      allow delete: if isValidId(userId) && docId == 'account' && isVerified() && isOwner(userId);
+    }
+  }
+}

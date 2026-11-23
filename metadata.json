@@ -1,0 +1,6 @@
+{
+  "name": "Sinaliza Libras",
+  "description": "Plataforma interativa de aprendizado e tradução de Libras (Língua Brasileira de Sinais) com tradutor VLibras, trilha de estudos gamificada e reconhecimento de sinais pela câmera.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
