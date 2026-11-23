@@ -242,6 +242,9 @@ export const CameraTranslatorView: React.FC = () => {
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const prediction: PredictionResponse = await response.json();
           if (session !== cameraSessionRef.current) return;
+          setCameraStatus(
+            `Câmera ativa · ${prediction.maos_detectadas} mão(s) detectada(s) · Modelo DuoManos`
+          );
 
           // Mostra a previsão mesmo abaixo do limiar: ajuda a diagnosticar
           // sinais que não foram bem aprendidos, como os movimentos de "OI".
