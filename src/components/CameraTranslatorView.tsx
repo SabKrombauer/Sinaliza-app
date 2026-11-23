@@ -39,7 +39,14 @@ const API_URL = (import.meta.env.VITE_LIBRAS_API_URL || '').replace(/\/$/, '');
 const API_INTERVAL_MS = 250;
 const API_CONFIDENCE_THRESHOLD = 0.72;
 
-type PredictionResponse = { sinal: string | null; confianca: number; maos_detectadas: number };
+type PredictionResponse = {
+  sinal: string | null;
+  confianca: number;
+  maos_detectadas: number;
+  modo?: 'estatico' | 'sequencia';
+  temporal_disponivel?: boolean;
+  progresso_temporal?: number;
+};
 
 const HAND_CONNECTIONS: Array<[number, number]> = [
   [0, 1], [1, 2], [2, 3], [3, 4],
@@ -218,6 +225,9 @@ export const CameraTranslatorView: React.FC = () => {
       );
 
       const session = cameraSessionRef.current;
+      // Evita misturar movimentos de cameras/navegadores distintos no Python.
+      const pythonSessionId = `cam-${session}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      let analysisIntervalMs = API_INTERVAL_MS;
       const analyzeWithPython = async (video: HTMLVideoElement) => {
         if (requestInFlightRef.current || !API_URL) return;
         requestInFlightRef.current = true;
@@ -235,6 +245,7 @@ export const CameraTranslatorView: React.FC = () => {
           if (!blob) return;
           const payload = new FormData();
           payload.append('imagem', blob, 'frame.jpg');
+          payload.append('sessao', pythonSessionId);
           const response = await fetch(`${API_URL}/reconhecer`, {
             method: 'POST',
             body: payload,
@@ -242,8 +253,15 @@ export const CameraTranslatorView: React.FC = () => {
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const prediction: PredictionResponse = await response.json();
           if (session !== cameraSessionRef.current) return;
+          // Somente a API com modelo temporal solicita capturas mais frequentes.
+          analysisIntervalMs = prediction.temporal_disponivel ? 110 : API_INTERVAL_MS;
+          const etapa = prediction.modo === 'sequencia'
+            ? 'Movimento reconhecido'
+            : prediction.temporal_disponivel
+              ? `Analisando movimento (${prediction.progresso_temporal ?? 0}/24)`
+              : 'Modelo estático';
           setCameraStatus(
-            `Câmera ativa · ${prediction.maos_detectadas} mão(s) detectada(s) · Modelo DuoManos`
+            `Câmera ativa · ${prediction.maos_detectadas} mão(s) detectada(s) · ${etapa}`
           );
 
           // Mostra a previsão mesmo abaixo do limiar: ajuda a diagnosticar
@@ -257,7 +275,9 @@ export const CameraTranslatorView: React.FC = () => {
                     label: prediction.sinal.toUpperCase(),
                     gloss: prediction.sinal.toUpperCase(),
                     confidence: prediction.confianca,
-                    handshapeHint: 'Previsão ainda abaixo do limiar para adicionar texto',
+                    handshapeHint: prediction.modo === 'sequencia'
+                      ? 'Movimento detectado, ainda abaixo do limiar de confiança'
+                      : 'Previsão ainda abaixo do limiar para adicionar texto',
                   }
                 : null
             );
@@ -270,7 +290,9 @@ export const CameraTranslatorView: React.FC = () => {
             label: prediction.sinal.toUpperCase(),
             gloss: prediction.sinal.toUpperCase(),
             confidence: prediction.confianca,
-            handshapeHint: 'Previsão do modelo treinado do DuoManos',
+            handshapeHint: prediction.modo === 'sequencia'
+              ? 'Sinal interpretado a partir da sequência de movimentos'
+              : 'Previsão do modelo estático do DuoManos',
           };
           setLiveCandidate(classification);
           const confirmed = liveGateRef.current.push(classification.label, prediction.confianca);
@@ -342,7 +364,7 @@ export const CameraTranslatorView: React.FC = () => {
             }
           }
           const now = performance.now();
-          if (API_URL && now - lastRequestAt >= API_INTERVAL_MS && !requestInFlightRef.current) {
+          if (API_URL && now - lastRequestAt >= analysisIntervalMs && !requestInFlightRef.current) {
             lastRequestAt = now;
             void analyzeWithPython(video);
           }
