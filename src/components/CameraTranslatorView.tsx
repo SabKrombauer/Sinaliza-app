@@ -275,7 +275,13 @@ export const CameraTranslatorView: React.FC = () => {
           setLiveCandidate(classification);
           const confirmed = liveGateRef.current.push(classification.label, prediction.confianca);
           if (confirmed) {
-            setCaptions((prev) => appendCaptionToken(prev, confirmed));
+            // Uma repeticao real, com pausa entre sinais, pode ser escrita novamente.
+            // A funcao de demonstracao deduplica palavras consecutivas, por isso
+            // usamos um registro separado para o modelo real.
+            setCaptions((prev) => [
+              ...prev,
+              { id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text: confirmed, timestamp: Date.now() },
+            ].slice(-16));
           }
           setCameraError(null);
         } catch (error) {
